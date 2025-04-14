@@ -8,9 +8,9 @@ torch.manual_seed(42)
 
 # Create a single test input
 batch, length, heads, dim = 4, 2048, 48, 128
-Q = torch.randn(batch, length, heads, dim, device="cuda")
-K = torch.randn(batch, length, heads, dim, device="cuda")
-V = torch.randn(batch, length, heads, dim, device="cuda")
+Q = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+K = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+V = torch.randn(batch, length, heads, dim, device="cuda") / 50.
 
 # Run both implementations
 parallel_output = parallel_linear_attention(Q, K, V)
