@@ -3,7 +3,7 @@ import argparse
 from parallel import linear_attention as parallel_linear_attention
 from recurrent import linear_attention as recurrent_linear_attention
 from recurrent_kernel import fused_recurrent
-from parallel_kernel import fused_parallel
+from parallel_kernel import linear_attention_triton
 from typing import Callable
 
 
