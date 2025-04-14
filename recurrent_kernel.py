@@ -11,7 +11,7 @@ import triton.language as tl
     key=["BK", "BV"],
 )
 @triton.jit(do_not_specialize=["T"])
-def fused_recurrent_fwd_kernel(
+def fused_recurrent_kernel(
     q,
     k,
     v,
@@ -53,7 +53,7 @@ def fused_recurrent_fwd_kernel(
         p_o += H * V
 
 
-def fused_recurrent_fwd(
+def fused_recurrent(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
@@ -67,7 +67,7 @@ def fused_recurrent_fwd(
     o = q.new_empty(NK, *v.shape, dtype=torch.float32)
 
     grid = (NV, NK, B * H)
-    fused_recurrent_fwd_kernel[grid](
+    fused_recurrent_kernel[grid](
         q,
         k,
         v,
