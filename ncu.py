@@ -3,6 +3,7 @@ import argparse
 from parallel import linear_attention as parallel_linear_attention
 from recurrent import linear_attention as recurrent_linear_attention
 from recurrent_kernel import fused_recurrent
+from parallel_kernel import fused_parallel
 from typing import Callable
 
 
@@ -51,6 +52,7 @@ def main(name: str) -> None:
         "parallel_pytorch": parallel_linear_attention,
         "recurrent_pytorch": recurrent_linear_attention,
         "recurrent_triton": fused_recurrent,
+        "parallel_triton": fused_parallel,
     }
     fn = implementations[name]
     print(f"Profiling {name} implementation...")
@@ -65,6 +67,7 @@ if __name__ == "__main__":
             "parallel_pytorch",
             "recurrent_pytorch",
             "recurrent_triton",
+            "parallel_triton",
         ],
     )
     args = parser.parse_args()
