@@ -2,10 +2,6 @@ import torch
 import triton
 import triton.language as tl
 
-from fla.ops.utils import chunk_global_cumsum
-from fla.ops.utils.op import exp
-from fla.utils import autocast_custom_bwd, autocast_custom_fwd, input_guard
-
 
 @triton.autotune(
     configs=[
@@ -55,3 +51,34 @@ def fused_recurrent_fwd_kernel(
         p_k += H * K
         p_v += H * V
         p_o += H * V
+
+
+def fused_recurrent_fwd(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+) -> torch.Tensor:
+    B, T, H, K = k.shape
+    V = v.shape[-1]
+    BK = min(K, 64)
+    BV = min(V, 64)
+    NK = triton.cdiv(K, BK)
+    NV = triton.cdiv(V, BV)
+    o = q.new_empty(NK, *v.shape, dtype=torch.float32)
+
+    grid = (NV, NK, B * H)
+    fused_recurrent_fwd_kernel[grid](
+        q,
+        k,
+        v,
+        o,
+        T=T,
+        B=B,
+        H=H,
+        K=K,
+        V=V,
+        BK=BK,
+        BV=BV,
+    )
+    o = o.sum(0)
+    return o
