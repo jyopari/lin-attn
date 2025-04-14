@@ -1,4 +1,8 @@
 import torch
+import argparse
+from parallel import linear_attention as parallel_linear_attention
+from recurrent import linear_attention as recurrent_linear_attention
+from recurrent_kernel import fused_recurrent
 from typing import Callable
 
 
@@ -31,3 +35,37 @@ def profile_ncu(
             torch.cuda.nvtx.range_pop()
 
     torch.cuda.cudart().cudaProfilerStop()
+
+
+def main(name: str) -> None:
+
+    # Set random seed for reproducibility
+    torch.manual_seed(42)
+
+    # Create a single test input
+    batch, length, heads, dim = 4, 2048, 48, 128
+    Q = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+    K = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+    V = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+    implementations = {
+        "parallel_pytorch": parallel_linear_attention,
+        "recurrent_pytorch": recurrent_linear_attention,
+        "recurrent_triton": fused_recurrent,
+    }
+    fn = implementations[name]
+    print(f"Profiling {name} implementation...")
+    profile_ncu(lambda: fn(Q, K, V))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "name",
+        choices=[
+            "parallel_pytorch",
+            "recurrent_pytorch",
+            "recurrent_triton",
+        ],
+    )
+    args = parser.parse_args()
+    main(args.name)
