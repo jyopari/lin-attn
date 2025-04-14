@@ -52,7 +52,7 @@ def main(name: str) -> None:
         "parallel_pytorch": parallel_linear_attention,
         "recurrent_pytorch": recurrent_linear_attention,
         "recurrent_triton": fused_recurrent,
-        "parallel_triton": fused_parallel,
+        "parallel_triton": linear_attention_triton,
     }
     fn = implementations[name]
     print(f"Profiling {name} implementation...")
