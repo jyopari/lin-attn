@@ -82,3 +82,69 @@ def fused_recurrent(
     )
     o = o.sum(0)
     return o
+
+
+def fused_recurrent_dataflow(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+) -> torch.Tensor:
+    B, T, H, K = k.shape
+    V = v.shape[-1]
+
+    BK = 64
+    BV = 64
+    NK = int(K / BK)
+    NV = int(V / BV)
+    assert BK * NK == K
+    assert BV * NV == V
+    o_tmp = torch.empty([NK, B, T, H, V], dtype=v.dtype, device=v.device)
+    for i_v in range(0, NV):  # parallel for
+        for i_k in range(0, NK):  # parallel for
+            for i_n in range(0, B):  # parallel for
+                for i_h in range(0, H):  # parallel for
+
+                    # on-chip buffer
+                    b_q = torch.empty([BK], dtype=q.dtype, device=q.device)
+                    b_k = torch.empty([BK], dtype=k.dtype, device=k.device)
+                    b_v = torch.empty([BV], dtype=v.dtype, device=v.device)
+                    b_h = torch.zeros([BV, BK], dtype=v.dtype, device=v.device)
+
+                    for i_t in range(0, T):
+
+                        # DRAM -> SRAM copy
+                        for j_k in range(0, BK):
+                            b_q[j_k] = q[i_n, i_t, i_h, i_k * BK + j_k]
+
+                        for j_k in range(0, BK):
+                            b_k[j_k] = k[i_n, i_t, i_h, i_k * BK + j_k]
+
+                        for j_v in range(0, BV):
+                            b_v[j_v] = v[i_n, i_t, i_h, i_v * BV + j_v]
+
+                        # on-chip compute
+                        for j_v in range(0, BV):
+                            for j_k in range(0, BK):
+                                b_h[j_v, j_k] += b_k[j_k] * b_v[j_v]
+
+                        b_o = torch.zeros([BV], dtype=v.dtype, device=v.device)
+                        for j_v in range(0, BV):
+                            for j_k in range(0, BK):
+                                b_o[j_v] += b_h[j_v, j_k] * b_q[j_k]
+
+                        # SRAM -> DRAM store
+                        for j_v in range(0, BV):
+                            o_tmp[i_k, i_n, i_t, i_h, i_v * BV + j_v] = b_o[j_v]
+
+    # reduce
+    o = torch.zeros([B, T, H, V], dtype=v.dtype, device=v.device)
+    for i_k in range(0, NK):
+        for i_n in range(0, B):
+            for i_t in range(0, T):
+                for i_h in range(0, H):
+                    for i_v in range(0, V):
+                        o[i_n, i_t, i_h, i_v] += o_tmp[i_k, i_n, i_t, i_h, i_v]
+
+    # check against fused_recurrent
+    o_ = fused_recurrent(q, k, v)
+    return o, o_
