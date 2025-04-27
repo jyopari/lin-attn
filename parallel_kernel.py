@@ -400,7 +400,14 @@ def fused_parallel_dataflow(
                     for j in range(BV):
                         o[i_k, i_b, i_t*BT+i, i_h, i_v*BV+j] += b_o[i,j]
 
-    return o.sum(0)
+    o_final = torch.zeros((B, T, H, V), device=q.device, dtype=q.dtype)
+    for i_nk in range(NK):
+        for b in range(B):
+            for t in range(T):
+                for h in range(H):
+                    for v in range(V):
+                        o_final[b, t, h, v] += o[i_nk, b, t, h, v]
+    return o_final
 
 
 
