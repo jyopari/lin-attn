@@ -2,7 +2,7 @@ import torch
 import argparse
 from parallel import linear_attention as parallel_linear_attention
 from recurrent import linear_attention as recurrent_linear_attention
-from recurrent_kernel import fused_recurrent
+from recurrent_kernel import fused_recurrent, fused_recurrent_dataflow
 from parallel_kernel import parallel_simple_gla
 from typing import Callable
 
@@ -57,6 +57,26 @@ def main(name: str) -> None:
     fn = implementations[name]
     print(f"Profiling {name} implementation...")
     profile_ncu(lambda: fn(Q, K, V))
+
+
+def statistics(name: str) -> None:
+
+    # Set random seed for reproducibility
+    torch.manual_seed(42)
+
+    # Create a single test input
+    batch, length, heads, dim = 4, 2048, 48, 128
+    Q = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+    K = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+    V = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+
+    implementations = {
+        "recurrent": fused_recurrent_dataflow,
+        # "parallel": parallel_simple_gla,
+    }
+    fn = implementations[name]
+    stats = fn(Q, K, V, count=True)
+    print(stats)
 
 
 if __name__ == "__main__":
