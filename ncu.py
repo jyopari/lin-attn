@@ -80,18 +80,40 @@ def statistics(name: str) -> pd.DataFrame:
                     K = torch.randn(batch, length, heads, dim, device="cuda") / 50.
                     V = torch.randn(batch, length, heads, dim, device="cuda") / 50.
 
-                    for BK in [16, 64, 128]:
-                        for BV in [16, 64, 128]:
-                            stats = fn(Q, K, V, count=True, BK=BK, BV=BV)
-                            results.append({
-                                "batch": batch,
-                                "length": length,
-                                "heads": heads,
-                                "dim": dim,
-                                "BK": BK,
-                                "BV": BV,
-                                **stats,
-                            })
+                    if name == "recurrent":
+                        for BK in [16, 64, 128]:
+                            for BV in [16, 64, 128]:
+                                stats = fn(Q, K, V, count=True, BK=BK, BV=BV)
+                                results.append({
+                                    "batch": batch,
+                                    "length": length,
+                                    "heads": heads,
+                                    "dim": dim,
+                                    "BK": BK,
+                                    "BV": BV,
+                                    **stats,
+                                })
+
+                    elif name == "parallel":
+                        for BT in [16, 32]:
+                            BS = BT
+                            for BK in [16, 64, 128]:
+                                for BV in [16, 64, 128]:
+                                    stats = fn(Q, K, V, count=True, BT=BT, BS=BS, BK=BK, BV=BV)
+                                    results.append({
+                                        "batch": batch,
+                                        "length": length,
+                                        "heads": heads,
+                                        "dim": dim,
+                                        "BT": BT,
+                                        "BS": BS,
+                                        "BK": BK,
+                                        "BV": BV,
+                                        **stats,
+                                    })
+
+                    else:
+                        raise ValueError(f"Unknown implementation: {name}")
 
     df = pd.DataFrame(results)
     return df
