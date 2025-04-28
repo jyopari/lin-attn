@@ -157,7 +157,7 @@ def fused_recurrent_dataflow(
                         # SRAM -> DRAM store
                         for j_v in range(0, BV):
                             if count:
-                                statistics["SRAM->DRAM"] += 1
+                                statistics["SRAM->DRAM"] += o_tmp.element_size()
                             else:
                                 o_tmp[i_k, i_n, i_t, i_h, i_v * BV + j_v] = b_o[j_v]
 
