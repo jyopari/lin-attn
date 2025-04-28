@@ -88,17 +88,24 @@ def fused_recurrent_dataflow(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
+    count: bool,
+    BK: int = 64,
+    BV: int = 64,
 ) -> torch.Tensor:
     B, T, H, K = k.shape
     V = v.shape[-1]
 
-    BK = 64
-    BV = 64
     NK = int(K / BK)
     NV = int(V / BV)
     assert BK * NK == K
     assert BV * NV == V
     o_tmp = torch.empty([NK, B, T, H, V], dtype=v.dtype, device=v.device)
+
+    statistics = {
+        "DRAM->SRAM": 0,
+        "SRAM->DRAM": 0,
+        "MAC": 0,
+    }
     for i_v in range(0, NV):  # parallel for
         for i_k in range(0, NK):  # parallel for
             for i_n in range(0, B):  # parallel for
@@ -114,37 +121,72 @@ def fused_recurrent_dataflow(
 
                         # DRAM -> SRAM copy
                         for j_k in range(0, BK):
-                            b_q[j_k] = q[i_n, i_t, i_h, i_k * BK + j_k]
+                            if count:
+                                statistics["DRAM->SRAM"] += q.element_size()
+                            else:
+                                b_q[j_k] = q[i_n, i_t, i_h, i_k * BK + j_k]
 
                         for j_k in range(0, BK):
-                            b_k[j_k] = k[i_n, i_t, i_h, i_k * BK + j_k]
+                            if count:
+                                statistics["DRAM->SRAM"] += k.element_size()
+                            else:
+                                b_k[j_k] = k[i_n, i_t, i_h, i_k * BK + j_k]
 
                         for j_v in range(0, BV):
-                            b_v[j_v] = v[i_n, i_t, i_h, i_v * BV + j_v]
+                            if count:
+                                statistics["DRAM->SRAM"] += v.element_size()
+                            else:
+                                b_v[j_v] = v[i_n, i_t, i_h, i_v * BV + j_v]
 
                         # on-chip compute
                         for j_v in range(0, BV):
                             for j_k in range(0, BK):
-                                b_h[j_v, j_k] += b_k[j_k] * b_v[j_v]
+                                if count:
+                                    statistics["MAC"] += 1
+                                else:
+                                    b_h[j_v, j_k] += b_k[j_k] * b_v[j_v]
 
                         b_o = torch.zeros([BV], dtype=v.dtype, device=v.device)
                         for j_v in range(0, BV):
                             for j_k in range(0, BK):
-                                b_o[j_v] += b_h[j_v, j_k] * b_q[j_k]
+                                if count:
+                                    statistics["MAC"] += 1
+                                else:
+                                    b_o[j_v] += b_h[j_v, j_k] * b_q[j_k]
 
                         # SRAM -> DRAM store
                         for j_v in range(0, BV):
-                            o_tmp[i_k, i_n, i_t, i_h, i_v * BV + j_v] = b_o[j_v]
+                            if count:
+                                statistics["SRAM->DRAM"] += 1
+                            else:
+                                o_tmp[i_k, i_n, i_t, i_h, i_v * BV + j_v] = b_o[j_v]
 
-    # reduce
-    o = torch.zeros([B, T, H, V], dtype=v.dtype, device=v.device)
-    for i_k in range(0, NK):
-        for i_n in range(0, B):
-            for i_t in range(0, T):
-                for i_h in range(0, H):
-                    for i_v in range(0, V):
-                        o[i_n, i_t, i_h, i_v] += o_tmp[i_k, i_n, i_t, i_h, i_v]
+    # ignore the statistics of separate reductions
+    if not count:
+        # reduce
+        o = torch.zeros([B, T, H, V], dtype=v.dtype, device=v.device)
+        for i_k in range(0, NK):
+            for i_n in range(0, B):
+                for i_t in range(0, T):
+                    for i_h in range(0, H):
+                        for i_v in range(0, V):
+                            o[i_n, i_t, i_h, i_v] += o_tmp[i_k, i_n, i_t, i_h, i_v]
 
-    # check against fused_recurrent
-    o_ = fused_recurrent(q, k, v)
-    return o, o_
+        # check against fused_recurrent
+        o_ = fused_recurrent(q, k, v)
+
+    statistics["SRAM-size"] = (
+        b_q.numel() * b_q.element_size() +
+        b_k.numel() * b_k.element_size() +
+        b_v.numel() * b_v.element_size() +
+        b_h.numel() * b_h.element_size()
+    )
+    statistics["arithmetic-intensity"] = (
+        (statistics["MAC"] * 2) /
+        (statistics["DRAM->SRAM"] + statistics["SRAM->DRAM"])
+    )
+
+    if count:
+        return statistics
+    else:
+        return o, o_
