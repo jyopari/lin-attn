@@ -60,7 +60,7 @@ def main(name: str) -> None:
     profile_ncu(lambda: fn(Q, K, V))
 
 
-def statistics(name: str) -> None:
+def statistics(name: str) -> pd.DataFrame:
 
     # Set random seed for reproducibility
     torch.manual_seed(42)
