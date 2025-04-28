@@ -1,5 +1,6 @@
 import torch
 import argparse
+import pandas as pd
 from parallel import linear_attention as parallel_linear_attention
 from recurrent import linear_attention as recurrent_linear_attention
 from recurrent_kernel import fused_recurrent, fused_recurrent_dataflow
@@ -64,19 +65,36 @@ def statistics(name: str) -> None:
     # Set random seed for reproducibility
     torch.manual_seed(42)
 
-    # Create a single test input
-    batch, length, heads, dim = 4, 2048, 48, 128
-    Q = torch.randn(batch, length, heads, dim, device="cuda") / 50.
-    K = torch.randn(batch, length, heads, dim, device="cuda") / 50.
-    V = torch.randn(batch, length, heads, dim, device="cuda") / 50.
-
     implementations = {
         "recurrent": fused_recurrent_dataflow,
         # "parallel": parallel_simple_gla,
     }
     fn = implementations[name]
-    stats = fn(Q, K, V, count=True)
-    print(stats)
+    results = []
+
+    for batch in [1, 2, 4]:
+        for length in [64]:
+            for heads in [16]:
+                for dim in [128]:
+                    Q = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+                    K = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+                    V = torch.randn(batch, length, heads, dim, device="cuda") / 50.
+
+                    for BK in [16, 64, 128]:
+                        for BV in [16, 64, 128]:
+                            stats = fn(Q, K, V, count=True, BK=BK, BV=BV)
+                            results.append({
+                                "batch": batch,
+                                "length": length,
+                                "heads": heads,
+                                "dim": dim,
+                                "BK": BK,
+                                "BV": BV,
+                                **stats,
+                            })
+
+    df = pd.DataFrame(results)
+    return df
 
 
 if __name__ == "__main__":
