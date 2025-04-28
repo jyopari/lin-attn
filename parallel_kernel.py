@@ -289,16 +289,17 @@ def fused_parallel_dataflow(
     q: torch.Tensor,
     k: torch.Tensor,
     v: torch.Tensor,
+    count: bool,
+    BT: int = 32,
+    BS: int = 32,
+    BK: int = 128,
+    BV: int = 128,
 ) -> torch.Tensor:
-    chunk_size = 32
     B, T, H, K, V = *k.shape, v.shape[-1]
-    BT, BS = chunk_size, 32
     # if check_shared_mem('hopper', k.device.index):
     #     BK = min(256, triton.next_power_of_2(K))
     #     BV = min(256, triton.next_power_of_2(V))
     # elif check_shared_mem('ampere', k.device.index):
-    BK = min(128, triton.next_power_of_2(K))
-    BV = min(128, triton.next_power_of_2(V))
     # else:
     #     BK = min(64, triton.next_power_of_2(K))
     #     BV = min(64, triton.next_power_of_2(V))
@@ -310,40 +311,54 @@ def fused_parallel_dataflow(
     chunk_indices = None
     NT = triton.cdiv(T, BT)
 
-    o = torch.zeros((NK, B, T, H, V), device=q.device, dtype=q.dtype)  
-    for i_kv in range(NK * NV): # parallel for  
-        for i_t in range(NT): # parallel for  
-            for i_bh in range(B * H): # parallel for  
-                i_k, i_v = i_kv // NV, i_kv % NV  
-                i_b, i_h = i_bh // H, i_bh % H  
+    o = torch.zeros((NK, B, T, H, V), device=q.device, dtype=q.dtype)
+    statistics = {
+        "DRAM->SRAM": 0,
+        "SRAM->DRAM": 0,
+        "MAC": 0,
+    }
+    for i_kv in range(NK * NV): # parallel for
+        for i_t in range(NT): # parallel for
+            for i_bh in range(B * H): # parallel for
+                i_k, i_v = i_kv // NV, i_kv % NV
+                i_b, i_h = i_bh // H, i_bh % H
 
-                # on chip buffer 
-                b_o = torch.zeros((BT, BV), device=q.device, dtype=q.dtype)  
-                b_q = torch.empty((BT, BK), device=q.device, dtype=q.dtype)  
+                # on chip buffer
+                b_o = torch.zeros((BT, BV), device=q.device, dtype=q.dtype)
+                b_q = torch.empty((BT, BK), device=q.device, dtype=q.dtype)
 
-                # on chip buffer 
-                m_s = torch.empty((BT, BS), device=q.device, dtype=torch.bool)  
-                b_s = torch.zeros((BT, BS), device=q.device, dtype=q.dtype)  
-                b_k = torch.empty((BK, BS), device=q.device, dtype=q.dtype)  
-                b_v = torch.empty((BS, BV), device=q.device, dtype=q.dtype)  
+                # on chip buffer
+                m_s = torch.empty((BT, BS), device=q.device, dtype=torch.bool)
+                b_s = torch.zeros((BT, BS), device=q.device, dtype=q.dtype)
+                b_k = torch.empty((BK, BS), device=q.device, dtype=q.dtype)
+                b_v = torch.empty((BS, BV), device=q.device, dtype=q.dtype)
 
-                # DRAM -> SRAM copy 
-                for i in range(BT): 
-                    for j in range(BK): 
-                        # print(q.shape, i_b, i_t * BT + i, i_h, i_k * BK + j, NT, BT) 
-                        b_q[i, j] = q[i_b, i_t * BT + i, i_h, i_k * BK + j] 
+                # DRAM -> SRAM copy
+                for i in range(BT):
+                    for j in range(BK):
+                        if count:
+                            statistics["DRAM->SRAM"] += q.element_size()
+                        else:
+                            # print(q.shape, i_b, i_t * BT + i, i_h, i_k * BK + j, NT, BT)
+                            b_q[i, j] = q[i_b, i_t * BT + i, i_h, i_k * BK + j]
 
-                for i_s in range(i_t * BT, min((i_t + 1) * BT, T), BS): 
+                for i_s in range(i_t * BT, min((i_t + 1) * BT, T), BS):
 
-                    # DRAM -> SRAM copy 
-                    for i in range(BK): 
-                        for j in range(BS): 
-                            b_k[i, j] = k[i_b, i_s + j, i_h, i_k * BK + i] 
+                    # DRAM -> SRAM copy
+                    for i in range(BK):
+                        for j in range(BS):
+                            if count:
+                                statistics["DRAM->SRAM"] += k.element_size()
+                            else:
+                                b_k[i, j] = k[i_b, i_s + j, i_h, i_k * BK + i]
 
                     # DRAM -> SRAM copy
                     for i in range(BS):
                         for j in range(BV):
-                            b_v[i, j] = v[i_b, i_s + i, i_h, i_v * BV + j]
+                            if count:
+                                statistics["DRAM->SRAM"] += v.element_size()
+                            else:
+                                b_v[i, j] = v[i_b, i_s + i, i_h, i_v * BV + j]
 
                     # on chip compute 
                     for i in range(BT):
@@ -356,58 +371,97 @@ def fused_parallel_dataflow(
                         for j in range(BS):
                             b_s[i,j] = 0
                             for k_i in range(BK):
-                                b_s[i,j] += b_q[i,k_i] * b_k[k_i,j] 
+                                if count:
+                                    statistics["MAC"] += 1
+                                else:
+                                    b_s[i,j] += b_q[i,k_i] * b_k[k_i,j] 
 
                     # on chip compute 
                     for i in range(BT):
                         for j in range(BS):
-                            b_s[i,j] *= m_s[i,j]
+                            if count:
+                                statistics["MAC"] += 1
+                            else:
+                                b_s[i,j] *= m_s[i,j]
 
                     # on chip compute 
                     for i in range(BT):
                         for j in range(BV):
                             for s in range(BS):
-                                b_o[i,j] += b_s[i,s] * b_v[s,j]
+                                if count:
+                                    statistics["MAC"] += 1
+                                else:
+                                    b_o[i,j] += b_s[i,s] * b_v[s,j]
 
                 for i_s in range(i_t * BT - BS, -BS, -BS):
 
                     # DRAM -> SRAM copy
                     for i in range(BK):
                         for j in range(BS):
-                            b_k[i, j] = k[i_b, i_s + j, i_h, i_k * BK + i]
+                            if count:
+                                statistics["DRAM->SRAM"] += k.element_size()
+                            else:
+                                b_k[i, j] = k[i_b, i_s + j, i_h, i_k * BK + i]
 
                     # DRAM -> SRAM copy
                     for i in range(BS):
                         for j in range(BV):
-                            b_v[i, j] = v[i_b, i_s + i, i_h, i_v * BV + j]
+                            if count:
+                                statistics["DRAM->SRAM"] += v.element_size()
+                            else:
+                                b_v[i, j] = v[i_b, i_s + i, i_h, i_v * BV + j]
 
                     # on chip compute 
                     for i in range(BT):
                         for j in range(BS):
                             b_s[i,j] = 0
                             for k_i in range(BK):
-                                b_s[i,j] += b_q[i,k_i] * b_k[k_i,j]
+                                if count:
+                                    statistics["MAC"] += 1
+                                else:
+                                    b_s[i,j] += b_q[i,k_i] * b_k[k_i,j]
 
                     # on chip compute 
                     if i_s >= 0:
                         for i in range(BT):
                             for j in range(BV):
                                 for s in range(BS):
-                                    b_o[i,j] += b_s[i,s] * b_v[s,j]
+                                    if count:
+                                        statistics["MAC"] += 1
+                                    else:
+                                        b_o[i,j] += b_s[i,s] * b_v[s,j]
 
                 # SRAM -> DRAM copy
                 for i in range(BT):
                     for j in range(BV):
-                        o[i_k, i_b, i_t*BT+i, i_h, i_v*BV+j] += b_o[i,j]
+                        if count:
+                            statistics["SRAM->DRAM"] += o.element_size()
+                        else:
+                            o[i_k, i_b, i_t * BT + i, i_h, i_v * BV + j] += b_o[i,j]
 
-    o_final = torch.zeros((B, T, H, V), device=q.device, dtype=q.dtype)
-    for i_nk in range(NK):
-        for b in range(B):
-            for t in range(T):
-                for h in range(H):
-                    for v in range(V):
-                        o_final[b, t, h, v] += o[i_nk, b, t, h, v]
-    return o_final
+    if count:
+        statistics["SRAM-size"] = (
+            b_q.numel() * b_q.element_size() +
+            b_k.numel() * b_k.element_size() +
+            b_v.numel() * b_v.element_size() +
+            b_o.numel() * b_o.element_size() +
+            b_s.numel() * b_s.element_size() +
+            m_s.numel() * m_s.element_size()
+        )
+        statistics["arithmetic-intensity"] = (
+            (statistics["MAC"] * 2) /
+            (statistics["DRAM->SRAM"] + statistics["SRAM->DRAM"])
+        )
+        return statistics
+    else:
+        o_final = torch.zeros((B, T, H, V), device=q.device, dtype=q.dtype)
+        for i_nk in range(NK):
+            for b in range(B):
+                for t in range(T):
+                    for h in range(H):
+                        for v in range(V):
+                            o_final[b, t, h, v] += o[i_nk, b, t, h, v]
+        return o_final
 
 
 
