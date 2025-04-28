@@ -162,7 +162,20 @@ def fused_recurrent_dataflow(
                                 o_tmp[i_k, i_n, i_t, i_h, i_v * BV + j_v] = b_o[j_v]
 
     # ignore the statistics of separate reductions
-    if not count:
+    if count:
+        statistics["SRAM-size"] = (
+            b_q.numel() * b_q.element_size() +
+            b_k.numel() * b_k.element_size() +
+            b_v.numel() * b_v.element_size() +
+            b_h.numel() * b_h.element_size()
+        )
+        statistics["arithmetic-intensity"] = (
+            (statistics["MAC"] * 2) /
+            (statistics["DRAM->SRAM"] + statistics["SRAM->DRAM"])
+        )
+
+        return statistics
+    else:
         # reduce
         o = torch.zeros([B, T, H, V], dtype=v.dtype, device=v.device)
         for i_k in range(0, NK):
@@ -174,19 +187,4 @@ def fused_recurrent_dataflow(
 
         # check against fused_recurrent
         o_ = fused_recurrent(q, k, v)
-
-    statistics["SRAM-size"] = (
-        b_q.numel() * b_q.element_size() +
-        b_k.numel() * b_k.element_size() +
-        b_v.numel() * b_v.element_size() +
-        b_h.numel() * b_h.element_size()
-    )
-    statistics["arithmetic-intensity"] = (
-        (statistics["MAC"] * 2) /
-        (statistics["DRAM->SRAM"] + statistics["SRAM->DRAM"])
-    )
-
-    if count:
-        return statistics
-    else:
         return o, o_
