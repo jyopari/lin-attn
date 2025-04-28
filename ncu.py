@@ -4,7 +4,7 @@ import pandas as pd
 from parallel import linear_attention as parallel_linear_attention
 from recurrent import linear_attention as recurrent_linear_attention
 from recurrent_kernel import fused_recurrent, fused_recurrent_dataflow
-from parallel_kernel import parallel_simple_gla
+from parallel_kernel import parallel_simple_gla, fused_parallel_dataflow
 from typing import Callable
 
 
@@ -67,7 +67,7 @@ def statistics(name: str) -> pd.DataFrame:
 
     implementations = {
         "recurrent": fused_recurrent_dataflow,
-        # "parallel": parallel_simple_gla,
+        "parallel": fused_parallel_dataflow,
     }
     fn = implementations[name]
     results = []
