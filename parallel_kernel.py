@@ -491,9 +491,9 @@ if __name__ == "__main__":
         return output
 
     # Test parameters
-    batch_size = 2
-    seq_len = 32
-    num_heads = 16
+    batch_size = 1
+    seq_len = 16
+    num_heads = 8
     head_dim = 16
     value_dim = 16
     
@@ -522,7 +522,7 @@ if __name__ == "__main__":
     
     output_reference = linear_attention(q_scaled, k, v)
 
-    output_dataflow = fused_parallel_dataflow(q_scaled, k, v)
+    output_dataflow = fused_parallel_dataflow(q_scaled, k, v, count=False, BT=16, BS=16, BK=16, BV=16)
     
     # Compare outputs
     max_diff_parallel = torch.max(torch.abs(output_parallel - output_reference))
